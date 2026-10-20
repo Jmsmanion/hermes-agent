@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 from pathlib import Path
 
 from pm import termux_libs
@@ -602,8 +603,12 @@ def _apply_pins(changed: list, lockfile) -> int:
             # One broken pin — a package's resolution bug or one target's upstream
             # pool skew (rolling Termux pool 404 while nodejs.org is ahead) — must
             # not zero out the whole run. Pin the rest, report the failure (#125386).
-            print(f"✗ {d.name} pin failed: {e}")
-            failed[d.name] = f"{type(e).__name__}: {e}"
+            # str(HTTPError) omits the URL, and a bare "404" can't tell you which
+            # upstream (nodejs.org, Termux pool, mirror) is missing the file.
+            url = e.url if isinstance(e, urllib.error.HTTPError) else None
+            detail = f"{e} ({url})" if url else str(e)
+            print(f"✗ {d.name} pin failed: {detail}")
+            failed[d.name] = f"{type(e).__name__}: {detail}"
             continue
         lockfile.set_pin(d.name, d.version, artifacts)
         pinned.append(d.name)
