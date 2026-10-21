@@ -69,6 +69,13 @@ _HOOK_MAX_ABANDONED_WORKERS = 3
 _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE = "pre_tool_call plugin callback timed out or is still running"
 
 
+def _policy_timeout_block_message(hook_name: str) -> str:
+    """Return an actionable timeout reason for a fail-closed policy hook."""
+    if hook_name == "pre_tool_call":
+        return _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE
+    return f"{hook_name} plugin callback timed out or is still running"
+
+
 def _policy_error_block_directive(hook_name: str, cb: Callable, exc: BaseException) -> dict[str, str]:
     """Block directive for a fail-closed hook whose callback raised: names the callback and the
     error (truncated — a hook that embeds tool args in its exception must not grow the tool
@@ -283,7 +290,7 @@ class PluginDispatchMixin:
                     ret = self._run_hook_callback_bounded(hook_name, cb, kwargs, timeout)
                     if ret is _HOOK_SKIPPED:
                         if fail_closed:  # policy hook: fail closed with a block directive
-                            results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
+                            results.append({"action": "block", "message": _policy_timeout_block_message(hook_name)})
                         continue
                 else:
                     ret = self._invoke_hook_callback(cb, kwargs)
@@ -565,7 +572,7 @@ class PluginDispatchMixin:
             except TimeoutError:
                 logger.warning("Hook '%s' callback %s timed out after %.0fs", hook_name, callback_name, timeout)
                 if fail_closed:  # policy hook: fail closed with a block directive
-                    results.append({"action": "block", "message": _PRE_TOOL_CALL_TIMEOUT_BLOCK_MESSAGE})
+                    results.append({"action": "block", "message": _policy_timeout_block_message(hook_name)})
             except (Exception, SystemExit) as exc:
                 # Same isolation + failure contract as the sync path (#111922 warn-once, #109624
                 # a raising policy guard fails closed).
