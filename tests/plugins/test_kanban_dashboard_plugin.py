@@ -203,6 +203,25 @@ def test_task_detail_includes_links_and_events(client):
 # PATCH /tasks/:id — status transitions
 # ---------------------------------------------------------------------------
 
+def test_manual_triage_to_todo_transition_preserves_task_contract(client):
+    body = "## Acceptance criteria\n- Preserve this exact criterion.\n\n## Pilot activities\nimplementation\n"
+    task = client.post(
+        "/api/plugins/kanban/tasks",
+        json={"title": "already specified", "body": body, "assignee": "builder", "triage": True},
+    ).json()["task"]
+    assert task["status"] == "triage"
+
+    response = client.patch(
+        f"/api/plugins/kanban/tasks/{task['id']}", json={"status": "todo"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["task"]["status"] == "todo"
+    assert response.json()["task"]["body"] == body
+    with kbc.connect() as conn:
+        stored = kb.get_task(conn, task["id"])
+        assert stored is not None and stored.body == body
+
+
 def test_patch_review_lifecycle_preserves_handoff_and_reopens(client):
     secret = "ghp_" + "D" * 40
     task = client.post(
