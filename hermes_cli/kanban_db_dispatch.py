@@ -130,6 +130,8 @@ class DispatchResult:
     """Task ids reclaimed because their worker PID disappeared."""
     auto_blocked: list[str] = field(default_factory=list)
     """Task ids auto-blocked by the spawn-failure circuit breaker."""
+    pre_spawn_blocked: list[tuple[str, str]] = field(default_factory=list)
+    """(task id, reason) pairs blocked by a pre-spawn policy hook before any worker process starts."""
     timed_out: list[str] = field(default_factory=list)
     """Task ids whose workers exceeded ``max_runtime_seconds``."""
     stale: list[str] = field(default_factory=list)
@@ -2144,6 +2146,38 @@ def _dispatch_lane_task(
     if claimed.workspace_kind == "worktree":
         _kbw.set_branch_name(conn, claimed.id, resolved_branch_name or (claimed.branch_name or "").strip() or f"wt/{claimed.id}")
     _kbw._maybe_emit_scratch_tip(conn, claimed.id, claimed.workspace_kind)
+    # Policy gate after the workspace is fully identified and immediately before process spawn.
+    # Unlike kanban_task_claimed, this hook may veto; it is deliberately synchronous and
+    # fail-closed on callback error/timeout so a required preflight can prevent all model work.
+    from hermes_cli.lifecycle import invoke_hook
+    try:
+        from hermes_cli.profiles import get_active_profile_name
+        profile_name = get_active_profile_name()
+    except Exception:
+        profile_name = "default"
+    directives = invoke_hook(
+        "kanban_task_pre_spawn",
+        task_id=claimed.id,
+        board=board,
+        assignee=claimed.assignee,
+        run_id=claimed.current_run_id,
+        profile_name=profile_name,
+        workspace_path=str(workspace),
+        lane=lane,
+    )
+    block_reasons = []
+    for directive in directives:
+        if isinstance(directive, dict) and directive.get("action") == "block":
+            reason = str(directive.get("reason") or directive.get("message") or "pre-spawn policy blocked the task")
+            block_reasons.append(reason[:500])
+    if block_reasons:
+        reason = "; ".join(block_reasons)
+        if not _kb.block_task(
+            conn, claimed.id, reason=reason, kind="needs_input", expected_run_id=claimed.current_run_id,
+        ):
+            reason = "pre-spawn policy blocked dispatch, but the claimed run changed before it could be parked"
+        result.pre_spawn_blocked.append((claimed.id, reason))
+        return False
     if lane == "review":
         # Force-load sdlc-review; the kanban lifecycle is already in every
         # worker's system prompt via KANBAN_GUIDANCE.

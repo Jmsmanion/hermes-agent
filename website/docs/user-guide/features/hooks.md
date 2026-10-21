@@ -487,6 +487,7 @@ Payload fields below are the exact event-specific fields supplied by each call s
 | `on_human_input_resolved` | Observer | Exactly once per `on_human_input_request`, when the wait ends (answered, skipped, timed out, withdrawn, or failed); return ignored. | Same as the request plus `outcome` | Outcome only — never the answer itself. |
 | `on_room_member_activity` | Observer | While a hosted Group Chat member turn runs on the Bot Mode gateway, once per runtime event the member session emits (tool start/complete, approval request, message/reasoning deltas, errors); queued per consumer off the token path; return ignored. | `room_id`, `thread_id`, `member_id`, `turn_id`, `task_id`, `execution_generation`, `kind`, `seq`, `payload` | `payload` is the client-safe session event body: tool args and results, redacted approval commands, streamed member text. |
 | `kanban_task_claimed` | Observer | After claim commit, in dispatcher process before worker spawn; return ignored. | `task_id`, `profile_name`, `board`, `assignee`, `run_id` | Board/task/profile/assignee identifiers. |
+| `kanban_task_pre_spawn` | Policy gate (fail-closed on callback error/timeout) | After claim and workspace resolution, synchronously before the worker process is spawned. Return `{"action":"block","reason":"..."}` to park the claimed run as `needs_input`; no model process starts. | `task_id`, `profile_name`, `board`, `assignee`, `run_id`, `workspace_path`, `lane` | Task/run/profile identifiers and workspace path. Keep the callback bounded; do not mutate the board from the callback. |
 | `kanban_task_completed` | Observer | After completion and cleanup, usually in worker process; return ignored. | `task_id`, `profile_name`, `board`, `assignee`, `run_id`, `summary` | Summary may contain project/user content. |
 | `kanban_task_blocked` | Observer | After a blocked transition; the dependency-wait path fires before its transaction exits. Return ignored. | `task_id`, `profile_name`, `board`, `assignee`, `run_id`, `reason` | Reason may contain project/user content. |
 | `on_kanban_worker_spawned` | Observer | After `spawn_fn` returns and the worker PID is persisted; runs inside the dispatch lock, keep callbacks fast. Return ignored. | `task_id`, `profile_name`, `board`, `assignee`, `run_id`, `worker_pid`, `workspace_path` | `workspace_path` is a filesystem path and may reveal project layout or usernames. |
@@ -1830,7 +1831,11 @@ Fires after completion and cleanup, usually in the worker process. Its `summary`
 
 Fires after a normal blocked transition. The dependency-wait path invokes it before that write transaction exits. Its `reason` can contain project or user content.
 
-All three kanban hooks are observer-only and carry `task_id`, `profile_name`, `board`, `assignee`, and `run_id`; completed adds `summary`, and blocked adds `reason`.
+The claim, completion, and blocked lifecycle hooks are observer-only and carry `task_id`, `profile_name`, `board`, `assignee`, and `run_id`; completed adds `summary`, and blocked adds `reason`.
+
+#### `kanban_task_pre_spawn`
+
+This synchronous policy gate runs in the dispatcher after the task claim and workspace are durable, but before the worker subprocess starts. It receives `task_id`, `profile_name`, `board`, `assignee`, `run_id`, `workspace_path`, and `lane`. A plugin may return `{"action": "block", "reason": "..."}`; Hermes then closes that run through the normal `needs_input` block transition and does not spawn the model process. An exception or callback timeout also blocks. A callback that returns nothing leaves dispatch unchanged. Keep callbacks short, read-only, and specific to the route they protect.
 
 ### Kanban worker-lifecycle, task-mutation, and dispatch observers
 

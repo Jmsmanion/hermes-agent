@@ -49,6 +49,8 @@ _HOOK_TIMEOUT_BOUNDED_HOOKS: set[str] = {
     "pre_command",
     # Fires inside the compression commit window (lease held): a hung plugin must not wedge the session.
     "post_compaction",
+    # One task at a time, after workspace resolution and before worker process spawn.
+    "kanban_task_pre_spawn",
 }
 # Hooks whose calls are told apart by another payload field: one session's commands are one
 # sequence, so a still-running callback skips that session's next command, not another session's.
@@ -57,7 +59,7 @@ _HOOK_CALL_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 # Policy hooks: timeout / still-running must fail closed (block the tool).
-_HOOK_TIMEOUT_FAIL_CLOSED_HOOKS: set[str] = {"pre_tool_call"}
+_HOOK_TIMEOUT_FAIL_CLOSED_HOOKS: set[str] = {"pre_tool_call", "kanban_task_pre_spawn"}
 # Documented parent-thread serialization contract — never run on a timeout worker (hooks.md).
 _HOOK_CALLER_THREAD_HOOKS: set[str] = {"subagent_stop"}
 # After a timeout, suppress the same callback this long so a hung hook cannot pile up threads.
